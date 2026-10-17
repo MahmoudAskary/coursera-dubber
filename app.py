@@ -2,46 +2,61 @@ import streamlit as st
 import asyncio
 import os
 import re
+import base64
 from deep_translator import GoogleTranslator
 import edge_tts
 
-# إعدادات صفحة الموقع بتصميم نظيف
-st.set_page_config(page_title="Coursera Pro Study Companion", page_icon="🎓", layout="centered")
+# إعدادات الصفحة
+st.set_page_config(page_title="Coursera Cyber Studio", page_icon="🚀", layout="centered")
 
-# تصميم وتنسيق بصري احترافي عبر CSS
+# --- تصميم الواجهة الأسطورية (Dark Mode + Custom CSS) ---
 st.markdown("""
     <style>
-    .main-title {
-        font-size: 26px;
-        font-weight: 700;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 10px;
+    .stApp {
+        background-color: #090d16;
+        color: #f8fafc;
     }
-    .sub-title {
-        font-size: 15px;
-        color: #4B5563;
+    .main-header {
+        font-size: 28px;
+        font-weight: 800;
+        background: linear-gradient(90deg, #3b82f6, #06b6d4);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        margin-bottom: 5px;
+    }
+    .sub-header {
+        font-size: 14px;
+        color: #94a3b8;
         text-align: center;
         margin-bottom: 25px;
     }
     .stButton>button {
         width: 100%;
-        background-color: #2563EB;
+        background: linear-gradient(135deg, #2563eb, #1d4ed8);
         color: white;
         font-weight: bold;
-        border-radius: 8px;
-        height: 45px;
+        border-radius: 12px;
+        height: 50px;
+        border: none;
+        box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4);
+        transition: 0.3s;
     }
     .stButton>button:hover {
-        background-color: #1D4ED8;
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.6);
+    }
+    div[data-testid="stSidebar"] {
+        background-color: #0f172a;
+        color: #f8fafc;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🎓 منصة كورسيرا الذكية للدراسة والتتبع الصوتي</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">حول ملفات الشرح إلى دبلجة عربية، تابع النص بصرياً، ودرس باحترافية من هاتفك!</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🚀 Coursera Cyber Study Hub</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">منصة الدبلجة والتتبع الصوتي الذكي - النسخة الاحترافية الداكنة</div>', unsafe_allow_html=True)
 
-# أصوات الذكاء الاصطناعي المتاحة
+# أصوات الذكاء الاصطناعي
 VOICES = {
     "فصحى - أنثى (رسمي وواضح)": "ar-SA-ZahraNeural",
     "فصحى - ذكر (رسمي وواضح)": "ar-SA-HamedNeural",
@@ -51,105 +66,251 @@ VOICES = {
     "لهجة مصرية - ذكر": "ar-EG-ShakirNeural"
 }
 
-# شريط جانبي (Sidebar) للتحكم المنظم
+# الشريط الجانبي للإعدادات
 with st.sidebar:
-    st.header("⚙️ إعدادات التحويل")
+    st.header("⚙️ إعدادات الاستوديو")
     selected_voice_name = st.selectbox("🎙️ اختر الصوت واللهجة:", list(VOICES.keys()))
     translate_option = st.selectbox("🌐 لغة الملف:", ["نعم (ترجم من الإنجليزية للعربية)", "لا (النص عربي أصلاً)"])
     st.markdown("---")
-    st.info("💡 **نصيحة دراسية:** افتح فيديو الكورس على شاشة ونصف الشاشة، واجعل هذا التطبيق في النصف الآخر لتستمع وتتابع النص بتركيز.")
+    st.markdown("💡 **تعليمات الاستخدام:**\n1. ارفع ملف الترجمة `.vtt` أو `.txt`.\n2. اضغط بدء المعالجة.\n3. استخدم **مشغل التتبع التفاعلي** لقراءة النص وتغيير لونه تلقائياً مع الصوت!")
 
-# رفع الملف
-uploaded_file = st.file_uploader("📁 اختر ملف الترجمة (.vtt أو .txt) الخاص بالكورس", type=['vtt', 'txt'])
+uploaded_file = st.file_uploader("📁 ارفع ملف الترجمة هنا", type=['vtt', 'txt'])
+
+def parse_subtitles(content, file_name):
+    segments = []
+    if file_name.endswith('.vtt') or '-->' in content:
+        lines = content.split('\n')
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            if '-->' in line:
+                parts = line.split('-->')
+                def time_to_sec(t_str):
+                    try:
+                        t_parts = t_str.strip().split(':')
+                        h = int(t_parts[0])
+                        m = int(t_parts[1])
+                        s_ms = t_parts[2].split('.')
+                        return h * 3600 + m * 60 + int(s_ms[0]) + int(s_ms[1]) / 1000.0
+                    except:
+                        return 0.0
+                
+                start_sec = time_to_sec(parts[0])
+                end_sec = time_to_sec(parts[1])
+                
+                text_lines = []
+                i += 1
+                while i < len(lines) and lines[i].strip() and '-->' not in lines[i]:
+                    clean_l = re.sub(r'<[^>]+>', '', lines[i].strip())
+                    if clean_l:
+                        text_lines.append(clean_l)
+                    i += 1
+                txt = " ".join(text_lines)
+                if txt:
+                    segments.append({'start': start_sec, 'end': end_sec if end_sec > start_sec else start_sec + 4.0, 'text': txt})
+            else:
+                i += 1
+    
+    # لو الملف نصي عادي بدون تواقيت (TXT)
+    if not segments:
+        clean_content = re.sub(r'<[^>]+>', '', content)
+        sentences = [s.strip() for s in re.split(r'[.!?\n]+', clean_content) if s.strip()]
+        current_time = 0.0
+        for sent in sentences:
+            duration = max(3.0, len(sent.split()) * 0.4) # تقدير زمني تقريبي
+            segments.append({'start': current_time, 'end': current_time + duration, 'text': sent})
+            current_time += duration
+            
+    return segments
 
 async def generate_audio(text, voice_code, output_path):
     communicate = edge_tts.Communicate(text, voice_code)
     await communicate.save(output_path)
 
 if uploaded_file is not None:
-    # قراءة وتنظيف الملف
-    content = uploaded_file.read().decode("utf-8", errors="ignore")
+    raw_content = uploaded_file.read().decode("utf-8", errors="ignore")
+    segments = parse_subtitles(raw_content, uploaded_file.name)
     
-    if uploaded_file.name.endswith('.vtt') or '-->' in content:
-        content = re.sub(r'\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}.*', '', content)
-        content = re.sub(r'^\d+\s*$', '', content, flags=re.MULTILINE)
-        content = re.sub(r'<[^>]+>', '', content)
-    
-    raw_lines = [line.strip() for line in content.split('\n') if line.strip()]
-    clean_text = " ".join(raw_lines)
-
-    if not clean_text:
-        st.error("⚠️ الملف فارغ أو لم يتم العثور على نصوص داخله!")
+    if not segments:
+        st.error("⚠️ لم يتم العثور على نصوص صالحة في الملف.")
     else:
-        # زر البدء بالمعالجة
-        if st.button("🚀 معالجة وترجمة وتوليد الصوت الآن"):
-            with st.spinner("⏳ جاري تنظيف النص، الترجمة، وتوليد الصوت بدقة عالية..."):
+        if st.button("⚡ بدء معالجة وتوليد الاستوديو الذكي"):
+            with st.spinner("🔄 جاري الترجمة، ضبط التواقيت الزمنية، وتوليد الصوت النقي..."):
                 try:
-                    if "نعم" in translate_option:
-                        chunks = [clean_text[i:i+4000] for i in range(0, len(clean_text), 4000)]
-                        translator = GoogleTranslator(source='en', target='ar')
-                        translated = [translator.translate(chunk) for chunk in chunks]
-                        final_text = " ".join(translated)
-                    else:
-                        final_text = clean_text
+                    translator = GoogleTranslator(source='en', target='ar') if "نعم" in translate_option else None
                     
-                    # حفظ النصوص في الذاكرة المؤقتة للجلسة
-                    st.session_state['final_text'] = final_text
+                    full_text_list = []
+                    for seg in segments:
+                        txt = seg['text']
+                        if translator:
+                            try:
+                                txt = translator.translate(txt)
+                            except:
+                                pass
+                        seg['ar_text'] = txt
+                        full_text_list.append(txt)
                     
-                    output_mp3 = "coursera_dubbed.mp3"
+                    st.session_state['segments'] = segments
+                    
+                    output_mp3 = "coursera_studio.mp3"
                     voice_code = VOICES[selected_voice_name]
+                    combined_text = " ".join(full_text_list)
                     
-                    asyncio.run(generate_audio(final_text, voice_code, output_mp3))
-                    st.session_state['audio_ready'] = True
-                    st.success("🎉 تم تحويل الكورس وصنع الملف الصوتي بنجاح تام!")
+                    asyncio.run(generate_audio(combined_text, voice_code, output_mp3))
+                    st.session_state['studio_ready'] = True
+                    st.success("✨ تم إنشاء الاستوديو الصوتي والتزمني بنجاح!")
                 except Exception as e:
-                    st.error(f"حدث خطأ أثناء المعالجة: {str(e)}")
+                    st.error(f"خطأ في المعالجة: {str(e)}")
 
-        # إذا تم تجهيز النص والصوت، نعرض الميزات المتقدمة للتتبع والدراسة
-        if 'audio_ready' in st.session_state and st.session_state['audio_ready']:
+        # --- واجهة الاستوديو والتتبع التفاعلي المخصصة وقت تشغيل الصوت ---
+        if 'studio_ready' in st.session_state and st.session_state['studio_ready']:
             st.markdown("---")
-            st.subheader("🎧 مشغل الصوت المدمج")
-            st.audio("coursera_dubbed.mp3", format='audio/mp3')
+            st.markdown("### 🎧 استوديو المتابعة والتتبع اللحظي")
             
-            with open("coursera_dubbed.mp3", "rb") as f:
-                st.download_button(
-                    label="📥 تحميل ملف MP3 للاستماع في أي وقت",
-                    data=f,
-                    file_name="coursera_arabic_audio.mp3",
-                    mime="audio/mp3"
-                )
-            
-            st.markdown("---")
-            st.subheader("📖 عارض النص التفاعلي (للقراءة والتتبع أثناء الاستماع)")
-            
-            # ميزة البحث السريع داخل النص
-            search_query = st.text_input("🔍 البحث عن كلمة أو مفهوم داخل الشرح:")
-            display_text = st.session_state['final_text']
-            
-            if search_query:
-                st.info(f"نتائج البحث عن: '{search_query}'")
-                # إبراز النص أو تصفيته
-                paragraphs = [p for p in display_text.split('.') if search_query.lower() in p.lower()]
-                formatted_text = ". ".join(paragraphs) if paragraphs else "لم يتم العثور على الكلمة في النص."
-            else:
-                formatted_text = display_text
+            # قراءة ملف الصوت وتحويله لـ Base64 لضمان عمله بسلاسة داخل المكون التفاعلي
+            audio_path = "coursera_studio.mp3"
+            if os.path.exists(audio_path):
+                with open(audio_path, "rb") as f:
+                    audio_base64 = base64.b64encode(f.read()).decode('utf-8')
+                
+                import json
+                segments_json = json.dumps(st.session_state['segments'], ensure_ascii=False)
+                
+                # تضمين مشغل تفاعلي ذكي بـ HTML, CSS, و JavaScript لتغيير الألوان والقفز الزمني
+                player_html = f"""
+                <!DOCTYPE html>
+                <html lang="ar" dir="rtl">
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{
+                            background-color: #0b1120;
+                            color: #f1f5f9;
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                            margin: 0;
+                            padding: 15px;
+                        }}
+                        .player-container {{
+                            background: linear-gradient(145deg, #131d31, #0f172a);
+                            border: 1px solid #1e293b;
+                            border-radius: 16px;
+                            padding: 20px;
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+                        }}
+                        audio {{
+                            width: 100%;
+                            border-radius: 8px;
+                            outline: none;
+                            filter: invert(100%) hue-rotate(180deg) brightness(95%);
+                        }}
+                        .transcript-box {{
+                            margin-top: 20px;
+                            max-height: 350px;
+                            overflow-y: auto;
+                            padding-right: 5px;
+                            scroll-behavior: smooth;
+                        }}
+                        .transcript-box::-webkit-scrollbar {{
+                            width: 6px;
+                        }}
+                        .transcript-box::-webkit-scrollbar-thumb {{
+                            background: #334155;
+                            border-radius: 4px;
+                        }}
+                        .sub-item {{
+                            padding: 12px 16px;
+                            margin-bottom: 10px;
+                            border-radius: 10px;
+                            background-color: rgba(30, 41, 59, 0.5);
+                            border: 1px solid rgba(51, 65, 85, 0.4);
+                            cursor: pointer;
+                            transition: all 0.25s ease;
+                            font-size: 16px;
+                            line-height: 1.6;
+                        }}
+                        .sub-item:hover {{
+                            background-color: rgba(51, 65, 85, 0.8);
+                        }}
+                        .sub-item.active {{
+                            background-color: rgba(6, 182, 212, 0.15);
+                            border-color: #06b6d4;
+                            color: #22d3ee;
+                            box-shadow: 0 0 15px rgba(6, 182, 212, 0.25);
+                            transform: scale(1.01);
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <div class="player-container">
+                        <audio id="audioPlayer" controls>
+                            <source src="data:audio/mp3;base64,{audio_base64}" type="audio/mp3">
+                            متصفحك لا يدعم تشغيل الصوت.
+                        </audio>
+                        <div class="transcript-box" id="transcriptBox"></div>
+                    </div>
 
-            # صندوق قراءة منسق ومرتب
-            st.text_area("النص المعالج (جاهز للقراءة والمتابعة):", formatted_text, height=250)
+                    <script>
+                        const segments = {segments_json};
+                        const audio = document.getElementById('audioPlayer');
+                        const box = document.getElementById('transcriptBox');
+                        
+                        // بناء قائمة النصوص تفاعلياً
+                        segments.forEach((seg, index) => {{
+                            const div = document.createElement('div');
+                            div.className = 'sub-item';
+                            div.id = 'seg-' + index;
+                            div.innerText = seg.ar_text;
+                            div.onclick = () => {{
+                                audio.currentTime = seg.start;
+                                audio.play();
+                            }};
+                            box.appendChild(div);
+                        }});
 
-# --- قسم المفكرة الدراسية المتقدمة ---
+                        let activeIndex = -1;
+                        audio.addEventListener('timeupdate', () => {{
+                            const t = audio.currentTime;
+                            let currentIdx = segments.findIndex(s => t >= s.start && t <= s.end);
+                            
+                            if (currentIdx !== -1 && currentIdx !== activeIndex) {{
+                                if (activeIndex !== -1) {{
+                                    document.getElementById('seg-' + activeIndex).classList.remove('active');
+                                }}
+                                activeIndex = currentIdx;
+                                const activeEl = document.getElementById('seg-' + activeIndex);
+                                activeEl.classList.add('active');
+                                activeEl.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                            }}
+                        }});
+                    </script>
+                </body>
+                </html>
+                """
+                
+                # عرض الاستوديو التفاعلي عبر مكون HTML مخصص داخل Streamlit
+                st.components.v1.html(player_html, height=480)
+                
+                # زر تحميل إضافي
+                with open(audio_path, "rb") as f:
+                    st.download_button(
+                        label="📥 تحميل ملف الصوت MP3 بصيغة نهائية",
+                        data=f,
+                        file_name="Coursera_Dubbed_Studio.mp3",
+                        mime="audio/mp3"
+                    )
+
+# --- مفكرة المهندس الذكية الداكنة ---
 st.markdown("---")
-st.subheader("📝 مفكرة المهندس والملاحظات السريعة")
-note_text = st.text_area("سجل الأفكار، القوانين، أو الملاحظات الهامة أثناء متابعة الكورس هنا:")
-if st.button("حفظ وتنزيل الملاحظات"):
+st.markdown("### 📝 مفكرة الأفكار التقنية")
+note_text = st.text_area("سجل ملاحظاتك وبرمجياتك أثناء متابعة الكورس:", placeholder="اكتب ملاحظاتك هنا...")
+if st.button("حفظ وتنزيل الملاحظات الشخصية"):
     if note_text:
         st.download_button(
-            label="💾 تحميل ملف الملاحظات الشخصي (TXT)",
+            label="💾 تحميل ملف الملاحظات (TXT)",
             data=note_text,
             file_name="My_Study_Notes.txt",
             mime="text/plain"
         )
-        st.success("الملاحظات جاهزة للتحميل على هاتفك!")
+        st.success("تم تجهيز ملف الملاحظات للتحميل!")
     else:
-        st.warning("اكتب شيئاً في المفكرة أولاً.")
-        
+        st.warning("يرجى كتابة ملاحظة أولاً.")
